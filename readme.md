@@ -45,3 +45,22 @@ Stale websocket connections will be reaped based on a configurable time period.
 - Wait for acknowledgement timeout
 - Message resend times
 - Stale websocket connection timeout
+
+# Testing
+
+The infrastructure spinup is handled completely by CloudFormation. Launch the stack, then grab the API Gateway websocket
+connection endpoint from the CloudFormation stack output.
+
+## Create a client
+
+    npm install -g wscat
+
+    # simulate multiple clients by running this command in several
+    # different terminal sessions
+    wscat -c wss://<endpoint details>.amazonaws.com/test
+
+TODO Explain the `test` portion of the URL
+
+## Send a message
+
+    TODO Invoke a Lambda function with the CLI
