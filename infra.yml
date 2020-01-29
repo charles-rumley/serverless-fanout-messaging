@@ -1,0 +1,401 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: "Write a description" # TODO
+Resources:
+  ConnectionManagementTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: "connectionId"
+          AttributeType: S
+        - AttributeName: "sort"
+          AttributeType: S
+      KeySchema:
+        - AttributeName: "connectionId"
+          KeyType: HASH
+        - AttributeName: "sort"
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: "connectionExpiration" # TODO Review this
+        Enabled: true
+
+  SubscriberMessagingApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: "messaging-api"
+      Description: "API Description" # TODO
+      RouteSelectionExpression: "$request.body.action"
+      ProtocolType: WEBSOCKET
+      CredentialsArn:
+        Fn::GetAtt: ApiRole.Arn
+
+  ConnectRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref SubscriberMessagingApi
+      RouteKey: $connect
+      AuthorizationType: NONE
+      OperationName: "ConnectRoute"
+      Target: !Sub "integrations/${ConnectIntegration}"
+
+  ConnectIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    DependsOn:
+      - ApiRole
+    Properties:
+      ApiId: !Ref SubscriberMessagingApi
+      Description: Invoke a step function with the connection details
+      # TODO Might be able to use the credentials of the caller to simplify this
+      CredentialsArn:
+        Fn::GetAtt: ApiRole.Arn
+      IntegrationType: AWS
+      IntegrationMethod: POST
+      IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:states:action/StartExecution"
+      TemplateSelectionExpression: \$default
+      RequestTemplates:
+        \$default:
+          !Sub |-
+            {
+              "input": "{\"connectionId\": \"$context.connectionId\", \"connectedAt\": \"$context.connectedAt\"}",
+              "stateMachineArn": "${PersistNewConnection}"
+            }
+
+  ConnectIntegrationResponse:
+    Type: 'AWS::ApiGatewayV2::IntegrationResponse'
+    Properties:
+      IntegrationId: !Ref ConnectIntegration
+      IntegrationResponseKey: $default
+      TemplateSelectionExpression: '${integration.response.statuscode}'
+      ResponseTemplates:
+        '@default': '$input.body'
+      ApiId: !Ref SubscriberMessagingApi
+
+  ConnectRouteResponse:
+    Type: 'AWS::ApiGatewayV2::RouteResponse'
+    Properties:
+      RouteId: !Ref ConnectRoute
+      ApiId: !Ref SubscriberMessagingApi
+      RouteResponseKey: $default
+
+  DisconnectRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref SubscriberMessagingApi
+      RouteKey: $disconnect
+      AuthorizationType: NONE
+      OperationName: "ConnectRoute"
+      Target: !Sub "integrations/${ConnectIntegration}"
+
+  DisconnectIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    DependsOn:
+      - ApiRole
+    Properties:
+      ApiId: !Ref SubscriberMessagingApi
+      Description: Invoke a step function with the disconnection details
+      # TODO Might be able to use the credentials of the caller to simplify this
+      CredentialsArn:
+        Fn::GetAtt: ApiRole.Arn
+      IntegrationType: AWS
+      IntegrationMethod: POST
+      IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:states:action/StartExecution"
+      TemplateSelectionExpression: \$default
+      RequestTemplates:
+        \$default:
+          !Sub |-
+          {
+            "input": "{\"connectionId\": \"$context.connectionId\", \"disconnectedAt\": \"$context.requestTimeEpoch\"}"
+            "stateMachineArn": "${RemoveConnection}"
+          }
+
+  Deployment:
+    Type: AWS::ApiGatewayV2::Deployment
+    DependsOn:
+      - ConnectRoute
+      - DisconnectRoute
+      #- SendRoute
+    Properties:
+      ApiId: !Ref SubscriberMessagingApi
+
+  Stage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      StageName: prod
+      Description: prod stage
+      DeploymentId: !Ref Deployment
+      ApiId: !Ref SubscriberMessagingApi
+
+  ApiRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - apigateway.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: invoke-step-functions
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - states:StartExecution
+                Resource: "*" # TODO Add step function ARNs here
+        - PolicyName: call-execute-api
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - execute-api:Invoke
+                  - execute-api:ManageConnections
+                Resource: "arn:aws:execute-api:*:*:*"
+        - PolicyName: push-to-cw
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                  - logs:PutLogEvents
+                  - logs:GetLogEvents
+                  - logs:FilterLogEvents
+                Resource: "*"
+
+  StepFunctionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - states.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: allow-dynamo-access
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                Resource:
+                  Fn::GetAtt: ConnectionManagementTable.Arn
+
+
+  # TODO state machines needed
+  # deliver-payload
+  PersistAck:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineType: STANDARD
+      DefinitionString: !Sub |
+        {
+          "StartAt": "Persist Payload",
+          "States": {
+            "Persist Payload": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::dynamodb:updateItem",
+              "Parameters": {
+                "TableName": "${ConnectionManagementTable}",
+                "UpdateExpression": "SET MyKey = :myValueRef",
+                "ExpressionAttributeValues": {
+                  ":myValueRef": {
+                    "S": "MyValue"
+                  }
+                },
+                "Key.$": "$.input.connectionid"
+              },
+              "End": true,
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "ErrorA",
+                    "ErrorB"
+                  ],
+                  "IntervalSeconds": 1,
+                  "BackoffRate": 2,
+                  "MaxAttempts": 2
+                },
+                {
+                  "ErrorEquals": [
+                    "ErrorC"
+                  ],
+                  "IntervalSeconds": 5
+                }
+              ]
+            }
+          }
+        }
+      RoleArn:
+        Fn::GetAtt: StepFunctionRole.Arn
+
+  RemoveConnection:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineType: STANDARD
+      DefinitionString: !Sub |
+        {
+          "Comment": "Delete a given connection from Dynamo and retry until success",
+          "StartAt": "remove-connection",
+          "States": {
+            "remove-connection": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::dynamodb:deleteItem",
+              "Parameters": {
+                "TableName": "${ConnectionManagementTable}",
+                "Key": {
+                  "connectionId": {
+                    "S.$": "$.connectionId"
+                  },
+                  "sort": {
+                    "S": "metadata"
+                  }
+                }
+              },
+              "End": true,
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "ErrorA",
+                    "ErrorB"
+                  ],
+                  "IntervalSeconds": 1,
+                  "BackoffRate": 2,
+                  "MaxAttempts": 2
+                },
+                {
+                  "ErrorEquals": [
+                    "ErrorC"
+                  ],
+                  "IntervalSeconds": 5
+                }
+              ]
+            }
+          }
+        }
+      RoleArn:
+        Fn::GetAtt: StepFunctionRole.Arn
+
+  RemoveConnection:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineType: STANDARD
+      DefinitionString: !Sub |
+        {
+          "Comment": "Delete a given connection from Dynamo and retry until success",
+          "StartAt": "remove-connection",
+          "States": {
+            "remove-connection": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::dynamodb:deleteItem",
+              "Parameters": {
+                "TableName": "${ConnectionManagementTable}",
+                "Key": {
+                  "connectionId": {
+                    "S.$": "$.connectionId"
+                  },
+                  "sort": {
+                    "S": "metadata"
+                  }
+                }
+              },
+              "End": true,
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "ErrorA",
+                    "ErrorB"
+                  ],
+                  "IntervalSeconds": 1,
+                  "BackoffRate": 2,
+                  "MaxAttempts": 2
+                },
+                {
+                  "ErrorEquals": [
+                    "ErrorC"
+                  ],
+                  "IntervalSeconds": 5
+                }
+              ]
+            }
+          }
+        }
+      RoleArn:
+        Fn::GetAtt: StepFunctionRole.Arn
+
+  PersistNewConnection:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineType: STANDARD
+      DefinitionString: !Sub |-
+        {
+          "Comment": "Persist a given connection into Dynamo and retry until success",
+          "StartAt": "persist-new-connection",
+          "States": {
+            "persist-new-connection": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::dynamodb:updateItem",
+              "Parameters": {
+                "TableName": "${ConnectionManagementTable}",
+                "UpdateExpression": "SET connectedAt = :connectedAt",
+                "ExpressionAttributeValues": {
+                  ":connectedAt": {
+                    "N.$": "$.connectedAt"
+                  }
+                },
+                "Key": {
+                  "connectionId": {
+                    "S.$": "$.connectionId"
+                  },
+                  "sort": {
+                    "S": "metadata"
+                  }
+                }
+              },
+              "End": true,
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "ErrorA",
+                    "ErrorB"
+                  ],
+                  "IntervalSeconds": 1,
+                  "BackoffRate": 2,
+                  "MaxAttempts": 2
+                },
+                {
+                  "ErrorEquals": [
+                    "ErrorC"
+                  ],
+                  "IntervalSeconds": 5
+                }
+              ]
+            }
+          }
+        }
+      RoleArn:
+        Fn::GetAtt: StepFunctionRole.Arn
+
+Outputs:
+  WebSocketURI:
+    Description: "The WSS Protocol URI to connect to"
+    # TODO Use Sub here
+    Value: !Join [ '', [ 'wss://', !Ref SubscriberMessagingApi, '.execute-api.', !Ref 'AWS::Region','.amazonaws.com/', !Ref 'Stage'] ]
