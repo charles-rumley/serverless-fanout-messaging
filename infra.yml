@@ -109,12 +109,62 @@ Resources:
             "stateMachineArn": "${RemoveConnection}"
           }
 
+  AcknowledgeRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref SubscriberMessagingApi
+      RouteKey: acknowledge
+      AuthorizationType: NONE
+      OperationName: "AcknowledgeRoute"
+      Target: !Sub "integrations/${AcknowledgeIntegration}"
+
+  AcknowledgeIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    DependsOn:
+      - ApiRole
+    Properties:
+      ApiId: !Ref SubscriberMessagingApi
+      Description: Invoke a step function with a message sent over the websocket
+      # TODO Might be able to use the credentials of the caller to simplify this
+      CredentialsArn:
+        Fn::GetAtt: ApiRole.Arn
+      IntegrationType: AWS
+      IntegrationMethod: POST
+      IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:states:action/StartExecution"
+      TemplateSelectionExpression: \$default
+      # TODO Right now, the "PersistAck" function is actually handling all incoming messages,
+      # not just acknowledgements
+      RequestTemplates:
+        \$default:
+          !Sub |-
+            {
+              "input": "{\"connectionId\": \"$context.connectionId\", \"messageId\": \"$input.json(\'$\')\", \"acknowledgedAt\": \"$context.requestTimeEpoch\"}",
+              "stateMachineArn": "${PersistAck}"
+            }
+
+  AcknowledgeIntegrationResponse:
+    Type: 'AWS::ApiGatewayV2::IntegrationResponse'
+    Properties:
+      IntegrationId: !Ref AcknowledgeIntegration
+      IntegrationResponseKey: $default
+      TemplateSelectionExpression: '${integration.response.statuscode}'
+      ResponseTemplates:
+        '@default': '$input.body'
+      ApiId: !Ref SubscriberMessagingApi
+
+  AcknowledgeRouteResponse:
+    Type: 'AWS::ApiGatewayV2::RouteResponse'
+    Properties:
+      RouteId: !Ref AcknowledgeRoute
+      ApiId: !Ref SubscriberMessagingApi
+      RouteResponseKey: $default
+
   Deployment:
     Type: AWS::ApiGatewayV2::Deployment
     DependsOn:
       - ConnectRoute
       - DisconnectRoute
-      #- SendRoute
+      - AcknowledgeRoute
     Properties:
       ApiId: !Ref SubscriberMessagingApi
 
@@ -215,13 +265,20 @@ Resources:
               "Resource": "arn:aws:states:::dynamodb:updateItem",
               "Parameters": {
                 "TableName": "${ConnectionManagementTable}",
-                "UpdateExpression": "SET MyKey = :myValueRef",
+                "UpdateExpression": "SET acknowledgedAt = :acknowledgedAt",
                 "ExpressionAttributeValues": {
-                  ":myValueRef": {
-                    "S": "MyValue"
+                  ":acknowledgedAt": {
+                    "N.$": "$.acknowledgedAt"
                   }
                 },
-                "Key.$": "$.input.connectionid"
+                "Key": {
+                  "connectionId": {
+                    "S.$": "$.connectionId"
+                  },
+                  "sort": {
+                    "S.$": "$.messageId"
+                  }
+                }
               },
               "End": true,
               "Retry": [

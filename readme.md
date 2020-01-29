@@ -19,7 +19,8 @@ At-least-once delivery semantics.
 Incoming messages are wrapped and distributed over currently open sockets, using the following JSON message format: 
 
     {
-        "id": <unique message id>
+        "action": "distribute",
+        "messageId": <unique message id>,
         "payload": <base64 encoded payload>
     }
     
@@ -27,7 +28,8 @@ Subscribers process the message and respond with an acknowledgement message cont
 of the original message over the websocket.
 
     {
-        "ack": <processed message id>
+        "action": "acknowledge"
+        "messageId": <processed message id>
     }
     
 If an acknowledgement message is not received within the configured timeout, the message will be resent a configurable
