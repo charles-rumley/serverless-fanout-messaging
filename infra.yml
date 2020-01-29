@@ -84,8 +84,8 @@ Resources:
       ApiId: !Ref SubscriberMessagingApi
       RouteKey: $disconnect
       AuthorizationType: NONE
-      OperationName: "ConnectRoute"
-      Target: !Sub "integrations/${ConnectIntegration}"
+      OperationName: "DisconnectRoute"
+      Target: !Sub "integrations/${DisconnectIntegration}"
 
   DisconnectIntegration:
     Type: AWS::ApiGatewayV2::Integration
@@ -105,7 +105,7 @@ Resources:
         \$default:
           !Sub |-
           {
-            "input": "{\"connectionId\": \"$context.connectionId\", \"disconnectedAt\": \"$context.requestTimeEpoch\"}"
+            "input": "{\"connectionId\": \"$context.connectionId\", \"disconnectedAt\": \"$context.requestTimeEpoch\"}",
             "stateMachineArn": "${RemoveConnection}"
           }
 
