@@ -318,6 +318,12 @@ Resources:
               "Resource": "arn:aws:states:::dynamodb:deleteItem",
               "Parameters": {
                 "TableName": "${ConnectionManagementTable}",
+                "UpdateExpression": "SET connectedAt = :connectedAt",
+                "ExpressionAttributeValues": {
+                  ":connectedAt": {
+                    "N.$": "$.connectedAt"
+                  }
+                },
                 "Key": {
                   "connectionId": {
                     "S.$": "$.connectionId"
