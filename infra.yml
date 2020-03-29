@@ -249,6 +249,29 @@ Resources:
                 Resource:
                   Fn::GetAtt: ConnectionManagementTable.Arn
 
+  LambdaRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: allow-dynamo-access
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:Scan
+                Resource:
+                  Fn::GetAtt: ConnectionManagementTable.Arn
 
   # TODO state machines needed
   # deliver-payload
@@ -456,6 +479,46 @@ Resources:
         }
       RoleArn:
         Fn::GetAtt: StepFunctionRole.Arn
+
+  # responsible for looking up the connection ids and kicking off delivery step functions
+  FanoutMessageFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: nodejs12.x
+      Role:
+        Fn::GetAtt: LambdaRole.Arn
+      Environment:
+        Variables:
+#          AWS_REGION: !Ref AWS::Region
+          CONNECTION_TABLE_NAME: !Ref ConnectionManagementTable
+      Handler: index.handler
+      Code:
+        ZipFile: |
+          // Load the AWS SDK for Node.js
+          var AWS = require('aws-sdk');
+          // Set the region
+          AWS.config.update({region: process.env.AWS_REGION});
+
+          // Create DynamoDB service object
+          var ddb = new AWS.DynamoDB({apiVersion: '2012-08-10'});
+
+          exports.handler = function(event, context) {
+            var params = {
+              ProjectionExpression: 'connectionId',
+              TableName: process.env.CONNECTION_TABLE_NAME
+            };
+
+            ddb.scan(params, function(err, data) {
+              if (err) {
+                console.log("Error", err);
+              } else {
+                var connectionId = element.connectionId.S;
+                console.log("Found connectionId:" + connectionId);
+                // TODO: Kick off the step function with this connectionId and the given payload
+              }
+            });
+          }
+      Description: Fan out the payload to currently connected clients
 
 Outputs:
   WebSocketURI:
