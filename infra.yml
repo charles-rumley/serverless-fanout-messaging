@@ -273,8 +273,70 @@ Resources:
                 Resource:
                   Fn::GetAtt: ConnectionManagementTable.Arn
 
-  # TODO state machines needed
-  # deliver-payload
+  # persists the connection details of a new client connecting to our websocket
+  PersistNewConnection:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineType: STANDARD
+      DefinitionString: !Sub |-
+        {
+          "Comment": "Persist a given connection into Dynamo and retry until success",
+          "StartAt": "persist-new-connection",
+          "States": {
+            "persist-new-connection": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::dynamodb:updateItem",
+              "Parameters": {
+                "TableName": "${ConnectionManagementTable}",
+                "UpdateExpression": "SET connectedAt = :connectedAt",
+                "ExpressionAttributeValues": {
+                  ":connectedAt": {
+                    "N.$": "$.connectedAt"
+                  }
+                },
+                "Key": {
+                  "connectionId": {
+                    "S.$": "$.connectionId"
+                  },
+                  "sort": {
+                    "S": "metadata"
+                  }
+                }
+              },
+              "End": true,
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "ErrorA",
+                    "ErrorB"
+                  ],
+                  "IntervalSeconds": 1,
+                  "BackoffRate": 2,
+                  "MaxAttempts": 2
+                },
+                {
+                  "ErrorEquals": [
+                    "ErrorC"
+                  ],
+                  "IntervalSeconds": 5
+                }
+              ]
+            }
+          }
+        }
+      RoleArn:
+        Fn::GetAtt: StepFunctionRole.Arn
+
+  # send a payload to a specific client until it acknowledges the message
+  DeliverPayload:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineType: STANDARD
+      DefinitionString: # TODO Stub
+      RoleArn:
+        Fn::GetAtt: StepFunctionRole.Arn
+
+  # persist an acknowledgement received from the client that they've received our message
   PersistAck:
     Type: AWS::StepFunctions::StateMachine
     Properties:
@@ -327,6 +389,8 @@ Resources:
       RoleArn:
         Fn::GetAtt: StepFunctionRole.Arn
 
+
+  # removes the connection id of a client that's sent us a disconnection message
   RemoveConnection:
     Type: AWS::StepFunctions::StateMachine
     Properties:
@@ -339,59 +403,6 @@ Resources:
             "remove-connection": {
               "Type": "Task",
               "Resource": "arn:aws:states:::dynamodb:deleteItem",
-              "Parameters": {
-                "TableName": "${ConnectionManagementTable}",
-                "UpdateExpression": "SET connectedAt = :connectedAt",
-                "ExpressionAttributeValues": {
-                  ":connectedAt": {
-                    "N.$": "$.connectedAt"
-                  }
-                },
-                "Key": {
-                  "connectionId": {
-                    "S.$": "$.connectionId"
-                  },
-                  "sort": {
-                    "S": "metadata"
-                  }
-                }
-              },
-              "End": true,
-              "Retry": [
-                {
-                  "ErrorEquals": [
-                    "ErrorA",
-                    "ErrorB"
-                  ],
-                  "IntervalSeconds": 1,
-                  "BackoffRate": 2,
-                  "MaxAttempts": 2
-                },
-                {
-                  "ErrorEquals": [
-                    "ErrorC"
-                  ],
-                  "IntervalSeconds": 5
-                }
-              ]
-            }
-          }
-        }
-      RoleArn:
-        Fn::GetAtt: StepFunctionRole.Arn
-
-  PersistNewConnection:
-    Type: AWS::StepFunctions::StateMachine
-    Properties:
-      StateMachineType: STANDARD
-      DefinitionString: !Sub |-
-        {
-          "Comment": "Persist a given connection into Dynamo and retry until success",
-          "StartAt": "persist-new-connection",
-          "States": {
-            "persist-new-connection": {
-              "Type": "Task",
-              "Resource": "arn:aws:states:::dynamodb:updateItem",
               "Parameters": {
                 "TableName": "${ConnectionManagementTable}",
                 "UpdateExpression": "SET connectedAt = :connectedAt",
