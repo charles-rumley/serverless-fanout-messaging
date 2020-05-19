@@ -380,53 +380,6 @@ Resources:
       RoleArn:
         Fn::GetAtt: StepFunctionRole.Arn
 
-  RemoveConnection:
-    Type: AWS::StepFunctions::StateMachine
-    Properties:
-      StateMachineType: STANDARD
-      DefinitionString: !Sub |
-        {
-          "Comment": "Delete a given connection from Dynamo and retry until success",
-          "StartAt": "remove-connection",
-          "States": {
-            "remove-connection": {
-              "Type": "Task",
-              "Resource": "arn:aws:states:::dynamodb:deleteItem",
-              "Parameters": {
-                "TableName": "${ConnectionManagementTable}",
-                "Key": {
-                  "connectionId": {
-                    "S.$": "$.connectionId"
-                  },
-                  "sort": {
-                    "S": "metadata"
-                  }
-                }
-              },
-              "End": true,
-              "Retry": [
-                {
-                  "ErrorEquals": [
-                    "ErrorA",
-                    "ErrorB"
-                  ],
-                  "IntervalSeconds": 1,
-                  "BackoffRate": 2,
-                  "MaxAttempts": 2
-                },
-                {
-                  "ErrorEquals": [
-                    "ErrorC"
-                  ],
-                  "IntervalSeconds": 5
-                }
-              ]
-            }
-          }
-        }
-      RoleArn:
-        Fn::GetAtt: StepFunctionRole.Arn
-
   PersistNewConnection:
     Type: AWS::StepFunctions::StateMachine
     Properties:
