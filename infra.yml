@@ -491,10 +491,8 @@ Resources:
                   TableName: process.env.CONNECTION_TABLE_NAME
               };
 
-              const message = {
-                  payload: event.payload, // payload should already be base64 encoded
-                  messageId: crypto.randomBytes(16).toString('hex')
-              }
+              const messageId = crypto.randomBytes(16).toString('hex');
+              const payload = event.payload // payload should already be base64 encoded
 
               // TODO How is paging handled here?
               ddb.scan(params, function (err, data) {
@@ -506,9 +504,17 @@ Resources:
                           const connectionId = element.connectionId.S;
                           console.log("Found connectionId:" + connectionId);
 
+                          const stateMachineInput = {
+                              connectionId: connectionId,
+                              messageId: messageId,
+                              payload: payload
+                          }
+
+                          console.log("Sending this input to the step function", JSON.stringify(stateMachineInput))
+
                           const params = {
                               stateMachineArn: process.env.PAYLOAD_DELIVERY_FUNCTION_ARN,
-                              input: JSON.stringify(message) // pass in some input
+                              input: JSON.stringify(stateMachineInput)
                           };
 
                           stepfunctions.startExecution(params, function (err, data) {
