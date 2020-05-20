@@ -468,34 +468,62 @@ Resources:
         Fn::GetAtt: LambdaRole.Arn
       Environment:
         Variables:
-#          AWS_REGION: !Ref AWS::Region
           CONNECTION_TABLE_NAME: !Ref ConnectionManagementTable
+          PAYLOAD_DELIVERY_FUNCTION_ARN: !Ref DeliverPayload
       Handler: index.handler
       Code:
         ZipFile: |
           // Load the AWS SDK for Node.js
-          var AWS = require('aws-sdk');
+          const aws = require('aws-sdk');
+          const crypto = require('crypto');
           // Set the region
-          AWS.config.update({region: process.env.AWS_REGION});
+          aws.config.update({region: process.env.AWS_REGION});
 
           // Create DynamoDB service object
-          var ddb = new AWS.DynamoDB({apiVersion: '2012-08-10'});
+          const ddb = new aws.DynamoDB({apiVersion: '2012-08-10'});
 
-          exports.handler = function(event, context) {
-            var params = {
-              ProjectionExpression: 'connectionId',
-              TableName: process.env.CONNECTION_TABLE_NAME
-            };
+          // Create Step Function service object
+          const stepfunctions = new aws.StepFunctions();
 
-            ddb.scan(params, function(err, data) {
-              if (err) {
-                console.log("Error", err);
-              } else {
-                var connectionId = element.connectionId.S;
-                console.log("Found connectionId:" + connectionId);
-                // TODO: Kick off the step function with this connectionId and the given payload
+          exports.handler = function (event, context) {
+              const params = {
+                  ProjectionExpression: 'connectionId',
+                  TableName: process.env.CONNECTION_TABLE_NAME
+              };
+
+              const message = {
+                  payload: event.payload, // payload should already be base64 encoded
+                  messageId: crypto.randomBytes(16).toString('hex')
               }
-            });
+
+              // TODO How is paging handled here?
+              ddb.scan(params, function (err, data) {
+                  if (err) {
+                      console.log("Error", err);
+                  } else {
+                      // loop through the items returned from Dynamo
+                      data.Items.forEach(function (element, index, array) {
+                          const connectionId = element.connectionId.S;
+                          console.log("Found connectionId:" + connectionId);
+
+                          const params = {
+                              stateMachineArn: process.env.PAYLOAD_DELIVERY_FUNCTION_ARN,
+                              input: JSON.stringify(message) // pass in some input
+                          };
+
+                          stepfunctions.startExecution(params, function (err, data) {
+                              if (err) {
+                                  console.log('err while executing step function', err)
+                              } else {
+                                  console.log('started execution of step function', data)
+                              }
+                          })
+
+                          // TODO We're kicking off a new callback and continuing to loop through
+                          //   without following up, there's a potential for bad things
+                      });
+                  }
+              });
           }
       Description: Fan out the payload to currently connected clients
 
