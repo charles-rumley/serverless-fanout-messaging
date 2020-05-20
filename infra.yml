@@ -272,6 +272,22 @@ Resources:
                   - dynamodb:Scan
                 Resource:
                   Fn::GetAtt: ConnectionManagementTable.Arn
+        - PolicyName: allow-cloudwatch-access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:*
+                Resource: arn:aws:logs:*:*:*
+        - PolicyName: allow-step-function-invocation
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - states:StartExecution
+                Resource: arn:aws:states:*:*:*
 
   # persists the connection details of a new client connecting to our websocket
   PersistNewConnection:
